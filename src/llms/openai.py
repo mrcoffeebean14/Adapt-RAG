@@ -9,4 +9,4 @@ if not groq_api_key:
     raise RuntimeError("GROQ_API_KEY is not set. Add it to your environment or .env file.")
 
 os.environ["GROQ_API_KEY"] = groq_api_key
-llm = ChatGroq(model="openai/gpt-oss-120b")
+llm = ChatGroq(model="llama-3.3-70b-versatile")

@@ -1,7 +1,7 @@
 from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_community.chat_message_histories import ChatMessageHistory
 
-class ChatHistory:
+class ChatInMemoryHistory:
     store = {}
 
     @classmethod
@@ -14,3 +14,7 @@ class ChatHistory:
     def clear_history(cls, session_id: str):
         if session_id in cls.store:
             del cls.store[session_id]
+
+
+# Backward-compatible alias used by the API routes.
+ChatHistory = ChatInMemoryHistory
