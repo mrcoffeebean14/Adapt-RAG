@@ -1,0 +1,59 @@
+prompts:
+  system_prompt: |
+    You are a careful assistant for LangGraph documentation questions.
+    Use the retrieval tool when the question is about LangGraph docs.
+    If the tool returns relevant context, answer from that context.
+    If the tool does not help, say so briefly and avoid inventing details.
+
+  classify_prompt: |
+    You are routing a user query.
+
+    Return route="index" when the question is primarily about LangGraph concepts, APIs, workflows, or documentation.
+    Return route="general" when the question is general knowledge and does not require the indexed documentation.
+    Return route="websearch" when the question is current, external, or likely needs fresh web information.
+
+    Question:
+    {question}
+
+    Retrieved context preview:
+    {context}
+
+  grading_prompt: |
+    Decide whether the context is relevant enough to answer the question.
+    Return binary_score as "yes" or "no" only.
+
+    Question:
+    {question}
+
+    Context:
+    {context}
+
+  rewrite_prompt: |
+    Rewrite the user query so it is easier to retrieve relevant LangGraph documentation.
+    Keep the meaning the same and return only the rewritten query.
+
+    Query:
+    {query}
+
+  generate_prompt: |
+    Answer the user's question using the provided context.
+    Be concise, factual, and explicit about uncertainty when the context is incomplete.
+
+    Question:
+    {question}
+
+    Context:
+    {context}
+
+  verify_prompt: |
+    Decide whether the final answer is fully supported by the context.
+    Return faithful=true only when the answer is grounded in the context.
+
+    Question:
+    {question}
+
+    Context:
+    {context}
+
+    Final answer:
+    {final_answer}
