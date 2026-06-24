@@ -1,14 +1,11 @@
 from fastapi import APIRouter
-from pydantic import BaseModel
 
 from src.memory.chat_history import ChatHistory
+from src.models.query_request import QueryRequest
 from src.rag.graph_builder import builder
 
 router = APIRouter()
 
-class QueryRequest(BaseModel):
-    query: str
-    token: str
 
 @router.post("/rag/query")
 async def rag_query(req: QueryRequest):
