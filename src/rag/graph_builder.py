@@ -1,4 +1,6 @@
-import pathlib
+"""
+Graph builder module for the adaptive RAG system.
+"""
 
 from langchain_community.tools import TavilySearchResults
 from langchain_core.messages import AIMessage
@@ -6,31 +8,34 @@ from langchain_core.prompts import PromptTemplate
 from langgraph.constants import START, END
 from langgraph.graph.state import StateGraph
 
-from src.rag.reAct_agent import get_agent_executor
+from src.rag.reAct_agent import agent_executor
 from src.rag.retriever_setup import get_retriever
 from src.config.settings import Config
-from src.llms.openai import llm
+from src.llms.groq import llm
 from src.models.grade import Grade
 from src.models.route_identifier import RouteIdentifier
 from src.models.state import State
-from src.tools.graph_tools import routing_tool, doc_tool, verify_answer
+from src.tools.graph_tools import routing_tool, doc_tool
 
 config = Config()
 
 
 # Node implementations
 def query_classifier(state: State):
-    """This is the node to classify the query if it is related to index or not
+    """
+    Classify the query to determine if it's related to indexed documents.
+
     Args:
-        state (State): the current state of the graph
+        state (State): The current state of the graph.
+
+    Returns:
+        dict: Updated state with route and latest_query.
     """
     question = state["messages"][-1].content
-    context = ""
-    try:
-        top_docs = get_retriever().invoke(question)
-        context = "\n\n".join([doc.page_content for doc in top_docs])
-    except Exception:
-        context = ""
+    retriever = get_retriever()
+    context = retriever.invoke(question)
+    print("docs received from Qdrant")
+    print(context)
 
     llm_with_structured_output = llm.with_structured_output(RouteIdentifier)
     classify_prompt = PromptTemplate(
@@ -39,62 +44,76 @@ def query_classifier(state: State):
     )
     chain = classify_prompt | llm_with_structured_output
     result = chain.invoke({"question": question, "context": context})
-    return {
-        "messages": state["messages"],
-        "route": result.route,
-        "latest_query": question,
-        "retrieved_context": context,
-    }
+    print("result received is in query classifier")
+    print(result.route)
+
+    return {"messages": state["messages"], "route": result.route, "latest_query": question}
+
 
 def general_llm(state: State):
-    """This nodes fetches general common knowledge result from the llm
+    """
+    Fetch general common knowledge result from the LLM.
+
     Args:
-        state (State): the current state of the graph
+        state (State): The current state of the graph.
+
+    Returns:
+        dict: Updated messages from LLM.
     """
     result = llm.invoke(state["messages"])
-    return {"messages": [result]}
+    print("inside general llm")
+    print(result)
+    return {"messages": result}
 
 
 def retriever_node(state: State):
-    """This node will be used to retriever the result from the vectorStores
-    Args:
-        state (State): the current state of the graph
     """
-    question = state["latest_query"]
-    agent_executor = get_agent_executor()
-    result = agent_executor.invoke({"input": question})
+    Retrieve results from vector stores using the reAct agent.
 
+    Args:
+        state (State): The current state of the graph.
+
+    Returns:
+        dict: Updated messages with tool calls.
+    """
+    messages = state["latest_query"]
+    result = agent_executor.invoke({"input": messages})
+
+    # Extract tool calls
     intermediate_steps = result.get("intermediate_steps", [])
     tool_calls = []
-    retrieved_parts = []
     if intermediate_steps:
         for action, tool_result in intermediate_steps:
             tool_calls.append({
                 "tool": action.tool,
                 "input": action.tool_input,
             })
-            if isinstance(tool_result, str):
-                retrieved_parts.append(tool_result)
+
     new_message = AIMessage(
         content=result["output"],
         additional_kwargs={"tool_calls": tool_calls},
     )
+
     return {
-        "messages": [new_message],
-        "retrieved_context": "\n\n".join(retrieved_parts) or state.get("retrieved_context", ""),
+        "messages": [new_message]
     }
 
 
 def grade(state: State):
-    """This node will be used to grade the result from the vectorStores
+    """
+    Grade the results retrieved from vector stores.
+
     Args:
-        state (State): the current state of the graph
+        state (State): The current state of the graph.
+
+    Returns:
+        dict: Updated state with binary_score.
     """
     grading_prompt = PromptTemplate(
         template=config.prompt("grading_prompt"),
         input_variables=["question", "context"]
     )
-    context = state.get("retrieved_context", "") or state["messages"][-1].content
+    context = state["messages"][-1].content
     question = state["latest_query"]
 
     llm_with_grade = llm.with_structured_output(Grade)
@@ -102,15 +121,20 @@ def grade(state: State):
     chain_graded = grading_prompt | llm_with_grade
     result = chain_graded.invoke({"question": question, "context": context})
 
+    print(result)
     return {"messages": state["messages"], "binary_score": result.binary_score}
 
 
 def rewrite_query(state: State):
-    """This node will rewrite the query to get the better results
-    Args:
-        state (State): State of the question
     """
+    Rewrite the query to get better retrieval results.
 
+    Args:
+        state (State): State of the question.
+
+    Returns:
+        dict: Updated latest_query.
+    """
     query = state["latest_query"]
     rewrite_prompt = PromptTemplate(
         template=config.prompt("rewrite_prompt"),
@@ -118,45 +142,61 @@ def rewrite_query(state: State):
     )
     chain = rewrite_prompt | llm
     result = chain.invoke({"query": query})
+    print(result)
+
     return {
-        "latest_query": result.content.strip()
+        "latest_query": result.content
     }
 
 
 def generate(state: State):
-    """This node will generate the answer for the user in the best and suitable way possible.
-    Args:
-        state (State): State of the question
     """
-    context = state.get("retrieved_context", "") or state["messages"][-1].content
+    Generate the final answer for the user.
+
+    Args:
+        state (State): State of the question.
+
+    Returns:
+        dict: Generated response.
+    """
+    context = state["messages"][-1].content
 
     generate_prompt = PromptTemplate(
         template=config.prompt("generate_prompt"),
-        input_variables=["question", "context"]
+        input_variables=["context"]
     )
 
     generate_chain = generate_prompt | llm
-    result = generate_chain.invoke({
-        "question": state["latest_query"],
-        "context": context,
-    })
+    result = generate_chain.invoke({"context": context})
 
-    return {"messages": [AIMessage(content=result.content)]}
+    return {"messages": [{"role": "assistant", "content": result.content}]}
 
 
 def web_search(state: State):
-    """This node will search the web for the rewritten query"""
+    """
+    Search the web for the rewritten query.
 
+    Args:
+        state (State): The current state of the graph.
+
+    Returns:
+        dict: Search results as messages.
+    """
+    # Initialize the Tavily tool
     search_tool = TavilySearchResults()
+
+    # Search a query
     result = search_tool.invoke(state["latest_query"])
 
     contents = [item["content"] for item in result if "content" in item]
+    print(contents)
+
     return {
-        "messages": [AIMessage(content="\n\n".join(contents))],
-        "retrieved_context": "\n\n".join(contents),
+        "messages": [{"role": "assistant", "content": "\n\n".join(contents)}]
     }
 
 
+# Build the graph
 graph = StateGraph(State)
 
 graph.add_node("query_analysis", query_classifier)
@@ -173,10 +213,8 @@ graph.add_edge("retriever", "grade")
 graph.add_edge("rewrite", "retriever")
 graph.add_conditional_edges("query_analysis", routing_tool)
 graph.add_conditional_edges("grade", doc_tool)
-graph.add_edge("generate",END)
-#graph.add_conditional_edges("generate", verify_answer)
+graph.add_edge("generate", END)
 graph.add_edge("general_llm", END)
 
-builder=graph.compile()
-
+builder = graph.compile()
 
