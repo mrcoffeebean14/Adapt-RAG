@@ -12,3 +12,4 @@ wheels/
 .agents
 .codex
 CHANGES.md
+app.log
