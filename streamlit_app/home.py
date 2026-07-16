@@ -27,9 +27,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-st.set_page_config(page_title="LangGraph Chat - Login")
+st.set_page_config(page_title="Adapt-RAG - Login")
 
-st.title("🔐 Welcome to LangGraph Assistant")
+st.title("🔐 Welcome to Adapt-RAG")
 
 token = ""
 
@@ -66,7 +66,7 @@ if submit:
             if response and response.get("jwt"):
                 st.session_state["jwt_token"] = response["jwt"]
                 st.session_state["username"] = username
-                st.switch_page("pages/Chat.py")
+                st.switch_page("pages/chat.py")
             else:
                 st.error("Login failed. Downstream API error: Received empty JWT token.")
 

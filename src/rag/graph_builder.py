@@ -8,7 +8,6 @@ from langchain_core.prompts import PromptTemplate
 from langgraph.constants import START, END
 from langgraph.graph.state import StateGraph
 
-from src.rag.reAct_agent import agent_executor
 from src.rag.retriever_setup import get_retriever
 from src.config.settings import Config
 from src.llms.groq import llm
@@ -68,35 +67,20 @@ def general_llm(state: State):
 
 def retriever_node(state: State):
     """
-    Retrieve results from vector stores using the reAct agent.
+    Retrieve documents from the vector store for the latest query.
+
+    Calls get_retriever() fresh each request so it sees documents uploaded
+    after import time (the ReAct agent captured a stale, empty tool).
 
     Args:
         state (State): The current state of the graph.
 
     Returns:
-        dict: Updated messages with tool calls.
+        dict: Retrieved document text as a message.
     """
-    messages = state["latest_query"]
-    result = agent_executor.invoke({"input": messages})
-
-    # Extract tool calls
-    intermediate_steps = result.get("intermediate_steps", [])
-    tool_calls = []
-    if intermediate_steps:
-        for action, tool_result in intermediate_steps:
-            tool_calls.append({
-                "tool": action.tool,
-                "input": action.tool_input,
-            })
-
-    new_message = AIMessage(
-        content=result["output"],
-        additional_kwargs={"tool_calls": tool_calls},
-    )
-
-    return {
-        "messages": [new_message]
-    }
+    retriever_tool = get_retriever()
+    content = retriever_tool.invoke(state["latest_query"])
+    return {"messages": [AIMessage(content=content)]}
 
 
 def grade(state: State):

@@ -1,5 +1,8 @@
 """
-Retriever setup and vector store configuration.
+Retriever setup and vector store configuration (Qdrant-backed).
+
+Documents live in a persistent Qdrant collection, so they survive restarts and
+are shared across backend replicas (unlike the old in-memory FAISS global).
 """
 
 import os
@@ -7,21 +10,38 @@ import os
 from langchain_core.documents import Document
 from langchain_core.tools import create_retriever_tool
 from langchain_community.embeddings import HuggingFaceEmbeddings
-# from langchain_qdrant import QdrantVectorStore
-from langchain_community.vectorstores import FAISS
+from langchain_qdrant import QdrantVectorStore
+from qdrant_client import QdrantClient
+from qdrant_client.http.models import Distance, VectorParams
 
 from src.core.config import settings
 
 embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
-# Global variable to store the FAISS vectorstore instance
-# This ensures get_retriever() can access documents stored by retriever_chain()
-_faiss_vectorstore = None
+COLLECTION = settings.DOCS_COLLECTION
+# Client construction is lazy about connecting, so import stays safe even if
+# Qdrant is down; the first collection op is where a bad URL would surface.
+_client = QdrantClient(url=settings.QDRANT_URL, api_key=settings.QDRANT_API_KEY)
+
+
+def _vectorstore() -> QdrantVectorStore:
+    """Connect to the Qdrant collection, creating it on first use."""
+    if not _client.collection_exists(COLLECTION):
+        dim = len(embeddings.embed_query("dimension probe"))
+        _client.create_collection(
+            COLLECTION,
+            vectors_config=VectorParams(size=dim, distance=Distance.COSINE),
+        )
+    return QdrantVectorStore(
+        client=_client,
+        collection_name=COLLECTION,
+        embedding=embeddings,
+    )
 
 
 def retriever_chain(chunks: list[Document]):
     """
-    Initialize and store documents in FAISS vector database.
+    Store document chunks in the Qdrant collection.
 
     Args:
         chunks: List of document chunks to store.
@@ -29,95 +49,36 @@ def retriever_chain(chunks: list[Document]):
     Returns:
         Boolean indicating success of the operation.
     """
-    global _faiss_vectorstore
-
     try:
-        # Commenting out Qdrant code for temporary FAISS usage
-        # vectorstore = QdrantVectorStore.from_documents(
-        #     documents=chunks,
-        #     embedding=embeddings,
-        #     url=settings.QDRANT_URL,
-        #     api_key=settings.QDRANT_API_KEY,
-        #     collection_name=settings.CODE_COLLECTION,
-        # )
-        vectorstore = FAISS.from_documents(
-            documents=chunks,
-            embedding=embeddings
-        )
-
-        # Store the vectorstore globally so get_retriever() can access it
-        _faiss_vectorstore = vectorstore
-
-        print("FAISS vector store initialized with documents")
-        print(f"Vectorstore contains {len(chunks)} document chunks")
+        _vectorstore().add_documents(chunks)
+        print(f"Stored {len(chunks)} chunks in Qdrant collection '{COLLECTION}'")
         return True
     except Exception as e:
-        print(f"Error storing documents in FAISS: {e}")
+        print(f"Error storing documents in Qdrant: {e}")
         return False
 
 
 def get_retriever():
     """
-    Get a retriever tool connected to the FAISS vector store.
+    Get a retriever tool over the persistent Qdrant collection.
 
-    Returns the retriever tool that can search documents stored by retriever_chain().
-    If no documents have been uploaded yet, creates a retriever with a dummy document.
+    An empty collection simply returns no results, so no cold-start dummy is
+    needed. The tool description is loaded from description.txt (rewritten on
+    each upload).
 
     Returns:
         A LangChain retriever tool configured for the vector store.
-
-    Raises:
-        Exception: If vector store initialization fails.
     """
-    global _faiss_vectorstore
+    retriever = _vectorstore().as_retriever()
 
-    try:
-        # Commenting out Qdrant code for temporary FAISS usage
-        # vectorstore = QdrantVectorStore.from_documents(
-        #     documents=[],
-        #     embedding=embeddings,
-        #     url=settings.QDRANT_URL,
-        #     api_key=settings.QDRANT_API_KEY,
-        #     collection_name=settings.CODE_COLLECTION,
-        # )
-        # retriever = vectorstore.as_retriever()
+    description = None
+    if os.path.exists("description.txt"):
+        with open("description.txt", "r", encoding="utf-8") as f:
+            description = f.read()
 
-        # Use the global vectorstore if it exists (documents have been uploaded)
-        if _faiss_vectorstore is not None:
-            retriever = _faiss_vectorstore.as_retriever()
-            print("Using existing FAISS vectorstore with uploaded documents")
-        else:
-            # No documents uploaded yet, create dummy for initialization
-            print("No documents uploaded yet, creating dummy vectorstore")
-            from langchain_core.documents import Document as LangChainDocument
-
-            dummy_doc = LangChainDocument(
-                page_content="No documents have been uploaded yet. Please upload a document first.",
-                metadata={"source": "initialization"}
-            )
-
-            _faiss_vectorstore = FAISS.from_documents(
-                documents=[dummy_doc],
-                embedding=embeddings
-            )
-            retriever = _faiss_vectorstore.as_retriever()
-
-        # Load document description
-        if os.path.exists("description.txt"):
-            with open("description.txt", "r", encoding="utf-8") as f:
-                description = f.read()
-        else:
-            description = None
-
-        retriever_tool = create_retriever_tool(
-            retriever,
-            "retriever_customer_uploaded_documents",
-            f"Use this tool **only** to answer questions about: {description}\n"
-            "Don't use this tool to answer anything else."
-        )
-
-        return retriever_tool
-
-    except Exception as e:
-        print(f"Error initializing retriever: {e}")
-        raise Exception(e)
+    return create_retriever_tool(
+        retriever,
+        "retriever_customer_uploaded_documents",
+        f"Use this tool **only** to answer questions about: {description}\n"
+        "Don't use this tool to answer anything else.",
+    )
