@@ -12,9 +12,9 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 
-# Bake the embedding model into the image so the container doesn't download it
-# on the first request (~90MB, all-MiniLM-L6-v2).
-RUN .venv/bin/python -c "from langchain_community.embeddings import HuggingFaceEmbeddings; HuggingFaceEmbeddings(model_name='all-MiniLM-L6-v2')"
+# The embedding model (~90MB, all-MiniLM-L6-v2) is downloaded on first boot and
+# cached to disk, not baked in — keeps the image smaller and builds faster/cheaper
+# (matters on HF Spaces' free build quota). Costs ~30s on the very first startup.
 
 COPY . .
 
