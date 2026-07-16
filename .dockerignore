@@ -1,0 +1,10 @@
+.venv
+.git
+.gitignore
+**/__pycache__
+*.pyc
+*.log
+.env
+.claude
+scratch
+Adapt_RAG.png
