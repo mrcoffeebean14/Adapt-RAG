@@ -1,3 +1,13 @@
+---
+title: Adapt RAG
+emoji: 💬
+colorFrom: purple
+colorTo: blue
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # Adapt-RAG - Agentic AI Chatbot
 
 [![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
