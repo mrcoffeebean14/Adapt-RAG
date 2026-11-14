@@ -16,3 +16,6 @@ app.log
 # local credentials
 *_db_user.txt
 .env.local
+
+# Claude Code local settings (per-user permissions; never commit)
+.claude/
