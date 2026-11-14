@@ -2,9 +2,13 @@
 API routes: auth, RAG query, document upload.
 """
 
+import time
+
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel, Field
+from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from src.api.auth import hash_password, make_token, user_from_token, verify_password
@@ -16,6 +20,10 @@ from src.rag.graph_builder import builder
 
 router = APIRouter()
 users = db["users"]
+
+# Per-account lockout. ponytail: no per-IP throttle (HF puts every client behind one proxy IP).
+MAX_FAILED_LOGINS = 5
+LOCKOUT_SECONDS = 15 * 60
 
 
 def current_user(authorization: str = Header("")) -> str:
@@ -58,9 +66,11 @@ class UserAuth(BaseModel):
 
 @router.post("/api/create_user")
 async def api_create_user(user: UserAuth):
+    # scrypt is deliberately slow; keep it off the event loop.
+    hashed = await run_in_threadpool(hash_password, user.password)
     try:
         # _id = username: Mongo enforces uniqueness for us.
-        await users.insert_one({"_id": user.username, "password": hash_password(user.password)})
+        await users.insert_one({"_id": user.username, "password": hashed})
     except DuplicateKeyError:
         raise HTTPException(409, "Username already taken")
     return {"status": "success"}
@@ -69,6 +79,20 @@ async def api_create_user(user: UserAuth):
 @router.post("/api/login")
 async def api_login(user: UserAuth):
     doc = await users.find_one({"_id": user.username})
-    if not doc or not verify_password(user.password, doc["password"]):
+    if doc and doc.get("locked_until", 0) > time.time():
+        raise HTTPException(429, "Too many failed logins. Try again in 15 minutes.")
+    if not doc or not await run_in_threadpool(verify_password, user.password, doc["password"]):
+        if doc:
+            # $inc is atomic, so parallel guesses can't slip past the limit.
+            doc = await users.find_one_and_update(
+                {"_id": user.username}, {"$inc": {"failed_logins": 1}}, return_document=ReturnDocument.AFTER
+            )
+            if doc["failed_logins"] >= MAX_FAILED_LOGINS:
+                await users.update_one(
+                    {"_id": user.username},
+                    {"$set": {"failed_logins": 0, "locked_until": time.time() + LOCKOUT_SECONDS}},
+                )
         raise HTTPException(401, "Invalid username or password")
+    if doc.get("failed_logins"):
+        await users.update_one({"_id": user.username}, {"$set": {"failed_logins": 0}})
     return {"token": make_token(user.username)}

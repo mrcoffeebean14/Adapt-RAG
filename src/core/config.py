@@ -15,8 +15,15 @@ class Settings:
     QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
     QDRANT_API_KEY = os.getenv("QDRANT_API_KEY") or None
     DOCS_COLLECTION = os.getenv("QDRANT_DOCS_COLLECTION", "documents")
-    # Random fallback works, but every restart then logs all users out.
+    # Random fallback is secure, but every restart then logs all users out.
     SECRET_KEY = os.getenv("SECRET_KEY") or secrets.token_hex(32)
 
 
 settings = Settings()
+
+# Fail closed on weak keys (e.g. "change-me"): they let anyone forge login tokens.
+if len(settings.SECRET_KEY) < 32:
+    raise RuntimeError(
+        "SECRET_KEY must be at least 32 characters. Generate one with: "
+        'python -c "import secrets; print(secrets.token_hex(32))"'
+    )

@@ -14,7 +14,7 @@ uv run python -m src.tools.graph_tools                    # self-check: routing 
 ```
 
 - No pytest/linter configured. The two `__main__` self-checks above are the only automated checks; they need no network.
-- Env vars: see `.env.example`. Required: `GROQ_API_KEY`, `TAVILY_API_KEY`, `SECRET_KEY` (random fallback if unset, which logs everyone out on restart), `MONGODB_URL`, `QDRANT_URL`/`QDRANT_API_KEY`. Optional: `GROQ_MODEL`, `MONGODB_DB_NAME`, `QDRANT_DOCS_COLLECTION`.
+- Env vars: see `.env.example`. Required: `GROQ_API_KEY`, `TAVILY_API_KEY`, `SECRET_KEY` (at least 32 characters; random fallback if unset, which logs everyone out on restart), `MONGODB_URL`, `QDRANT_URL`/`QDRANT_API_KEY`. Optional: `GROQ_MODEL`, `MONGODB_DB_NAME`, `QDRANT_DOCS_COLLECTION`.
 - Deployment target is a Hugging Face Docker Space (the git remote `space`); `start.sh` runs both services in one container, with the UI on 7860. See README "Deploy".
 
 ## Architecture
@@ -22,7 +22,7 @@ uv run python -m src.tools.graph_tools                    # self-check: routing 
 Streamlit (`streamlit_app/`) → `utils/api_client.py` (every call returns `(data, error)`) → FastAPI (`src/api/routes.py`) → LangGraph `builder` (`src/rag/graph_builder.py`).
 
 ### Auth (`src/api/auth.py`, `routes.py`)
-Real but minimal, stdlib only: scrypt password hashes in Mongo `users` (`_id` = username, so Mongo enforces uniqueness), stateless tokens `username.HMAC(SECRET_KEY)`. `current_user` dependency reads `Authorization: Bearer`. Tokens never expire. The username is the key for both chat history and document ownership.
+Real but minimal, stdlib only: scrypt password hashes in Mongo `users` (`_id` = username, so Mongo enforces uniqueness), stateless tokens `username.expiry.HMAC(SECRET_KEY)`, valid for 7 days (`TOKEN_TTL`), with no early revocation. `current_user` dependency reads `Authorization: Bearer`. `src/core/config.py` refuses to start if `SECRET_KEY` is set but shorter than 32 characters. Login locks an account after 5 failures (`failed_logins`/`locked_until` on the user doc), and scrypt runs in a thread pool. The username is the key for both chat history and document ownership.
 
 ### The graph
 ```

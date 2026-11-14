@@ -69,7 +69,7 @@ services, because a Space's disk is wiped on restart.
    |---|---|
    | `GROQ_API_KEY` | Groq key |
    | `TAVILY_API_KEY` | Tavily key |
-   | `SECRET_KEY` | the generated secret (if it changes, everyone is logged out) |
+   | `SECRET_KEY` | the generated secret, at least 32 characters; the app refuses to start with a shorter one (if it changes, everyone is logged out) |
    | `MONGODB_URL` | Atlas `mongodb+srv://…` URL |
    | `QDRANT_URL` | Qdrant Cloud URL (`https://…:6333`) |
    | `QDRANT_API_KEY` | Qdrant Cloud key |
@@ -118,6 +118,7 @@ streamlit_app/              login page, chat page, API client
 
 ## Known limits
 
-- Tokens don't expire. Rotating `SECRET_KEY` logs everyone out.
+- Login tokens expire after 7 days and can't be revoked early. Rotating `SECRET_KEY` logs everyone out.
+- 5 failed logins lock that account for 15 minutes. There is no per-IP limit.
 - Sign-up is open, so anyone who signs up uses your Groq and Tavily quota. Add rate limiting before you share the Space widely.
 - Scanned PDFs (images only) have no text to index.
