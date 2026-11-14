@@ -22,7 +22,7 @@ uv run python -m src.tools.graph_tools                    # self-check: routing 
 Streamlit (`streamlit_app/`) → `utils/api_client.py` (every call returns `(data, error)`) → FastAPI (`src/api/routes.py`) → LangGraph `builder` (`src/rag/graph_builder.py`).
 
 ### Auth (`src/api/auth.py`, `routes.py`)
-Real but minimal, stdlib only: scrypt password hashes in Mongo `users` (`_id` = username, so Mongo enforces uniqueness), stateless tokens `username.expiry.HMAC(SECRET_KEY)`, valid for 7 days (`TOKEN_TTL`), with no early revocation. `current_user` dependency reads `Authorization: Bearer`. `src/core/config.py` refuses to start if `SECRET_KEY` is set but shorter than 32 characters. Login locks an account after 5 failures (`failed_logins`/`locked_until` on the user doc), and scrypt runs in a thread pool. The username is the key for both chat history and document ownership.
+Real but minimal, stdlib only: scrypt password hashes in Mongo `users` (`_id` = username, so Mongo enforces uniqueness), stateless tokens `username.expiry.HMAC(SECRET_KEY)`, valid for 7 days (`TOKEN_TTL`), with no early revocation. `current_user` dependency reads `Authorization: Bearer`. `src/core/config.py` refuses to start if `SECRET_KEY` is set but shorter than 32 characters. Login allows 5 failed attempts per account per 15-minute window (`attempts`/`window_until` on the user doc). Each attempt is counted atomically, in one pipeline update, before the password check, so concurrent guesses cannot get past the limit. scrypt runs in a thread pool. The username is the key for both chat history and document ownership.
 
 ### The graph
 ```

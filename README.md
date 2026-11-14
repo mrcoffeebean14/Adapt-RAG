@@ -119,6 +119,6 @@ streamlit_app/              login page, chat page, API client
 ## Known limits
 
 - Login tokens expire after 7 days and can't be revoked early. Rotating `SECRET_KEY` logs everyone out.
-- 5 failed logins lock that account for 15 minutes. There is no per-IP limit.
+- 5 failed logins lock that account for the rest of a 15-minute window. Anyone who knows a username can trigger this. There is no per-IP limit.
 - Sign-up is open, so anyone who signs up uses your Groq and Tavily quota. Add rate limiting before you share the Space widely.
 - Scanned PDFs (images only) have no text to index.

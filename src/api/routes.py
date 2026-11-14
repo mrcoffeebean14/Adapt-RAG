@@ -21,9 +21,10 @@ from src.rag.graph_builder import builder
 router = APIRouter()
 users = db["users"]
 
-# Per-account lockout. ponytail: no per-IP throttle (HF puts every client behind one proxy IP).
-MAX_FAILED_LOGINS = 5
-LOCKOUT_SECONDS = 15 * 60
+# At most MAX_LOGIN_ATTEMPTS failed logins per account per window. Known tradeoff: anyone can
+# lock a victim out for one window. No per-IP limit: every request arrives from the Streamlit server.
+MAX_LOGIN_ATTEMPTS = 5
+LOGIN_WINDOW_SECONDS = 15 * 60
 
 
 def current_user(authorization: str = Header("")) -> str:
@@ -78,21 +79,21 @@ async def api_create_user(user: UserAuth):
 
 @router.post("/api/login")
 async def api_login(user: UserAuth):
-    doc = await users.find_one({"_id": user.username})
-    if doc and doc.get("locked_until", 0) > time.time():
-        raise HTTPException(429, "Too many failed logins. Try again in 15 minutes.")
+    now = time.time()
+    expired = {"$lt": [{"$ifNull": ["$window_until", 0]}, now]}
+    # Count the attempt atomically BEFORE checking the password, so concurrent guesses each
+    # get their own counter value and can't share a pre-lock snapshot.
+    doc = await users.find_one_and_update(
+        {"_id": user.username},
+        [{"$set": {
+            "attempts": {"$cond": [expired, 1, {"$add": [{"$ifNull": ["$attempts", 0]}, 1]}]},
+            "window_until": {"$cond": [expired, now + LOGIN_WINDOW_SECONDS, "$window_until"]},
+        }}],
+        return_document=ReturnDocument.AFTER,
+    )
+    if doc and doc["attempts"] > MAX_LOGIN_ATTEMPTS:
+        raise HTTPException(429, "Too many failed logins. Try again later.")
     if not doc or not await run_in_threadpool(verify_password, user.password, doc["password"]):
-        if doc:
-            # $inc is atomic, so parallel guesses can't slip past the limit.
-            doc = await users.find_one_and_update(
-                {"_id": user.username}, {"$inc": {"failed_logins": 1}}, return_document=ReturnDocument.AFTER
-            )
-            if doc["failed_logins"] >= MAX_FAILED_LOGINS:
-                await users.update_one(
-                    {"_id": user.username},
-                    {"$set": {"failed_logins": 0, "locked_until": time.time() + LOCKOUT_SECONDS}},
-                )
         raise HTTPException(401, "Invalid username or password")
-    if doc.get("failed_logins"):
-        await users.update_one({"_id": user.username}, {"$set": {"failed_logins": 0}})
+    await users.update_one({"_id": user.username}, {"$set": {"attempts": 0}})
     return {"token": make_token(user.username)}
