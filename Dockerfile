@@ -22,5 +22,11 @@ COPY . .
 # port): Streamlit on 7860, backend internal on 8000. docker-compose.yml overrides
 # this per-service, so this default only affects single-container deploys like HF.
 RUN sed -i 's/\r$//' start.sh && chmod +x start.sh
+
+# HF Spaces runs containers as uid 1000; give it a writable HOME for the
+# embedding-model cache.
+RUN useradd -m -u 1000 user
+USER user
+ENV HOME=/home/user
 EXPOSE 7860
 CMD ["./start.sh"]

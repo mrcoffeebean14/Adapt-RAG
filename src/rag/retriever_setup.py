@@ -1,54 +1,43 @@
 """
-Retriever setup and vector store configuration (Qdrant-backed).
-
-Documents live in a persistent Qdrant collection, so they survive restarts and
-are shared across backend replicas (unlike the old in-memory FAISS global).
+Qdrant-backed document store. Each chunk carries metadata.user, and every
+search is filtered to the caller's own documents.
 """
 
-import os
+from functools import cache
 
 from langchain_core.documents import Document
-from langchain_core.tools import create_retriever_tool
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
-from qdrant_client.http.models import Distance, VectorParams
+from qdrant_client.http.models import (
+    Distance, FieldCondition, Filter, MatchValue, PayloadSchemaType, VectorParams,
+)
 
 from src.core.config import settings
 
 embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
 COLLECTION = settings.DOCS_COLLECTION
-# Client construction is lazy about connecting, so import stays safe even if
-# Qdrant is down; the first collection op is where a bad URL would surface.
+# Construction doesn't connect; a bad URL surfaces on the first collection op.
 _client = QdrantClient(url=settings.QDRANT_URL, api_key=settings.QDRANT_API_KEY)
 
 
+@cache
 def _vectorstore() -> QdrantVectorStore:
-    """Connect to the Qdrant collection, creating it on first use."""
+    """Connect once, creating the collection and the user index on first use."""
     if not _client.collection_exists(COLLECTION):
         dim = len(embeddings.embed_query("dimension probe"))
         _client.create_collection(
             COLLECTION,
             vectors_config=VectorParams(size=dim, distance=Distance.COSINE),
         )
-    return QdrantVectorStore(
-        client=_client,
-        collection_name=COLLECTION,
-        embedding=embeddings,
-    )
+    # Idempotent. Qdrant Cloud refuses filters on unindexed fields.
+    _client.create_payload_index(COLLECTION, "metadata.user", PayloadSchemaType.KEYWORD)
+    return QdrantVectorStore(client=_client, collection_name=COLLECTION, embedding=embeddings)
 
 
-def retriever_chain(chunks: list[Document]):
-    """
-    Store document chunks in the Qdrant collection.
-
-    Args:
-        chunks: List of document chunks to store.
-
-    Returns:
-        Boolean indicating success of the operation.
-    """
+def retriever_chain(chunks: list[Document]) -> bool:
+    """Store document chunks. Returns True on success."""
     try:
         _vectorstore().add_documents(chunks)
         print(f"Stored {len(chunks)} chunks in Qdrant collection '{COLLECTION}'")
@@ -58,27 +47,8 @@ def retriever_chain(chunks: list[Document]):
         return False
 
 
-def get_retriever():
-    """
-    Get a retriever tool over the persistent Qdrant collection.
-
-    An empty collection simply returns no results, so no cold-start dummy is
-    needed. The tool description is loaded from description.txt (rewritten on
-    each upload).
-
-    Returns:
-        A LangChain retriever tool configured for the vector store.
-    """
-    retriever = _vectorstore().as_retriever()
-
-    description = None
-    if os.path.exists("description.txt"):
-        with open("description.txt", "r", encoding="utf-8") as f:
-            description = f.read()
-
-    return create_retriever_tool(
-        retriever,
-        "retriever_customer_uploaded_documents",
-        f"Use this tool **only** to answer questions about: {description}\n"
-        "Don't use this tool to answer anything else.",
-    )
+def retrieve(query: str, user: str, k: int = 4) -> str:
+    """Top-k chunks from this user's documents as plain text ("" if none)."""
+    own_docs = Filter(must=[FieldCondition(key="metadata.user", match=MatchValue(value=user))])
+    docs = _vectorstore().similarity_search(query, k=k, filter=own_docs)
+    return "\n\n".join(d.page_content for d in docs)
