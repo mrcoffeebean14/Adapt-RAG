@@ -2,8 +2,10 @@
 Graph builder module for the adaptive RAG system.
 """
 
+from datetime import date
+
 from langchain_community.tools import TavilySearchResults
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, SystemMessage
 from langchain_core.prompts import PromptTemplate
 from langgraph.constants import START, END
 from langgraph.graph.state import StateGraph
@@ -21,6 +23,11 @@ config = Config()
 
 def _prompt(key: str):
     return PromptTemplate.from_template(config.prompt(key))
+
+
+def _today() -> str:
+    """The model has no clock; without this it presents old web results as today's."""
+    return date.today().strftime("%B %d, %Y")
 
 
 def _user_question(state: State) -> str:
@@ -43,7 +50,9 @@ def query_classifier(state: State):
 
 def general_llm(state: State):
     """Answer from the model's own knowledge, with chat history."""
-    return {"messages": llm.invoke(state["messages"])}
+    # Without instructions, a long last answer made "summarise our chat" cover only that answer.
+    system = SystemMessage(content=config.prompt("general_prompt").format(today=_today()))
+    return {"messages": llm.invoke([system, *state["messages"]])}
 
 
 def retriever_node(state: State):
@@ -73,16 +82,21 @@ def rewrite_query(state: State):
 def generate(state: State):
     """Answer the user's question from the last message's context."""
     result = (_prompt("generate_prompt") | llm).invoke(
-        {"question": _user_question(state), "context": state["messages"][-1].content}
+        {"question": _user_question(state), "context": state["messages"][-1].content, "today": _today()}
     )
     return {"messages": [AIMessage(content=result.content)]}
 
 
 def web_search(state: State):
     """Search the web with Tavily and pass the snippets on as context."""
-    result = TavilySearchResults(max_results=5).invoke(state["latest_query"])
+    # The date steers Tavily to recent pages ("latest X" alone returned months-old articles).
+    result = TavilySearchResults(max_results=5).invoke(f"{state['latest_query']} as of {_today()}")
     # Tavily returns an error string instead of raising; treat it as no results.
-    contents = [item["content"] for item in result if isinstance(item, dict) and "content" in item]
+    # The URL often carries the event/date (".../2026-mexican-grand-prix"), which helps pick the latest.
+    contents = [
+        f"Source: {item.get('url', 'unknown')}\n{item['content']}"
+        for item in result if isinstance(item, dict) and "content" in item
+    ]
     return {"messages": [AIMessage(content="\n\n".join(contents))]}
 
 

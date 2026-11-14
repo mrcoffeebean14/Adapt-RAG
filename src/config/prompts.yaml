@@ -15,6 +15,7 @@ prompts:
     
     Priority:
     - Questions about this conversation itself (e.g. "what did I ask earlier?", "summarise our chat", "repeat your last answer") are always "general".
+    - Questions about today's date or day of the week are always "general": the assistant is told today's date.
     - Always choose "index" when relevant context exists.
     - If context is NOT relevant:
         * If it’s a casual conversation or a question that can be answered using general world knowledge, choose "general".
@@ -46,6 +47,17 @@ prompts:
   generate_prompt: |
     Answer the user's question using only the context below.
     If the context does not contain the answer, say you could not find it instead of guessing.
+    Today's date is {today}. The context may come from web pages published earlier. If the question
+    asks for the latest, current or today's information, answer with the most recent information in
+    the context and state the date it is from. If that date is not today, say so plainly instead of
+    presenting it as today's. Only say you could not find it if the context has nothing relevant.
+    If the question is about today's date, use {today}, not dates found in the context.
     Write a clear, readable answer.
     question: {question}
     context: {context}
+
+  general_prompt: |
+    You are Adapt-RAG, a helpful assistant. Today's date is {today}.
+    The messages after this one are your conversation with the user so far, oldest first.
+    When the user asks about the conversation itself (what they asked, a summary, a recap),
+    use the whole conversation, every topic from the first message on, not just the most recent exchange.
