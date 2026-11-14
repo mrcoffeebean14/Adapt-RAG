@@ -21,7 +21,7 @@ app = FastAPI(title="Adaptive RAG API", lifespan=lifespan)
 app.include_router(router)
 
 
-@app.get("/")
-async def root():
+@app.get("/health")  # "/" belongs to the Gradio UI (see app.py)
+async def health():
     """Health check."""
     return {"message": "Adaptive RAG API is running"}

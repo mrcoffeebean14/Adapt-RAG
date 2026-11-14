@@ -6,20 +6,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 uv sync                                                   # install (uv, not pip)
-uv run uvicorn src.main:app --reload --port 8000          # backend  → http://localhost:8000/docs
-uv run streamlit run streamlit_app/home.py                # frontend → http://localhost:8501
-docker compose up --build                                 # full stack incl. Mongo + Qdrant
+uv run python app.py                                      # UI http://localhost:7860 · API docs /docs · /health
+docker compose up --build                                 # same, plus local Mongo + Qdrant
 uv run python -m src.api.auth                             # self-check: hashing + tokens
 uv run python -m src.tools.graph_tools                    # self-check: routing + rewrite limit
 ```
 
 - No pytest/linter configured. The two `__main__` self-checks above are the only automated checks; they need no network.
 - Env vars: see `.env.example`. Required: `GROQ_API_KEY`, `TAVILY_API_KEY`, `SECRET_KEY` (at least 32 characters; random fallback if unset, which logs everyone out on restart), `MONGODB_URL`, `QDRANT_URL`/`QDRANT_API_KEY`. Optional: `GROQ_MODEL`, `MONGODB_DB_NAME`, `QDRANT_DOCS_COLLECTION`.
-- Deployment target is a Hugging Face Docker Space (the git remote `space`); `start.sh` runs both services in one container, with the UI on 7860. See README "Deploy".
+- Deployment target is a Hugging Face **Gradio** Space (Docker Spaces are paid on this account). The README front matter (`sdk: gradio`, `sdk_version`, `app_file: app.py`) configures it. HF installs `requirements.txt` with pip, so after any dependency change, regenerate it from `uv.lock` (command in its header) and keep `sdk_version` equal to the pinned `gradio`.
+- Git: deploy work goes on the `deployment` branch. Don't commit to `main`. Push with `git push space deployment:main`, because Spaces only build `main`.
 
 ## Architecture
 
-Streamlit (`streamlit_app/`) → `utils/api_client.py` (every call returns `(data, error)`) → FastAPI (`src/api/routes.py`) → LangGraph `builder` (`src/rag/graph_builder.py`).
+One process (`app.py`): the FastAPI app from `src/main.py` with a Gradio UI mounted at `/` via `gr.mount_gradio_app`, served by uvicorn on 7860. The health check is at `/health`, because `/` is the UI. The Gradio handlers call the route functions in `src/api/routes.py` directly (`api_login`, `rag_query`, `current_user`, …) instead of over HTTP, so validation and login limits stay identical. Errors come back as `HTTPException`/`ValidationError` and are shown in the UI. Login tokens live in `gr.State` (server-side, per browser tab). Request flow: Gradio → routes → LangGraph `builder` (`src/rag/graph_builder.py`).
 
 ### Auth (`src/api/auth.py`, `routes.py`)
 Real but minimal, stdlib only: scrypt password hashes in Mongo `users` (`_id` = username, so Mongo enforces uniqueness), stateless tokens `username.expiry.HMAC(SECRET_KEY)`, valid for 7 days (`TOKEN_TTL`), with no early revocation. `current_user` dependency reads `Authorization: Bearer`. `src/core/config.py` refuses to start if `SECRET_KEY` is set but shorter than 32 characters. Login allows 5 failed attempts per account per 15-minute window (`attempts`/`window_until` on the user doc). Each attempt is counted atomically, in one pipeline update, before the password check, so concurrent guesses cannot get past the limit. scrypt runs in a thread pool. The username is the key for both chat history and document ownership.

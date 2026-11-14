@@ -3,8 +3,10 @@ title: Adapt RAG
 emoji: 💬
 colorFrom: purple
 colorTo: blue
-sdk: docker
-app_port: 7860
+sdk: gradio
+sdk_version: 6.32.0
+python_version: "3.11"
+app_file: app.py
 pinned: false
 ---
 
@@ -16,7 +18,7 @@ An adaptive RAG chatbot. Each question is routed by an LLM to the best source:
 - **general**: the LLM's own knowledge, with your chat history
 - **search**: live web search (Tavily)
 
-FastAPI + LangGraph backend, Streamlit frontend, Groq LLM, MongoDB for users and chat history.
+FastAPI + LangGraph backend with a Gradio UI (one process, port 7860), Groq LLM, MongoDB for users and chat history.
 Each user's documents and history are private to them.
 
 ```
@@ -33,26 +35,27 @@ uv sync
 cp .env.example .env          # fill in GROQ_API_KEY, TAVILY_API_KEY, SECRET_KEY
 ```
 
+**Without Docker** (needs Mongo and Qdrant, local or cloud, set in `.env`):
+
+```bash
+uv run python app.py          # UI http://localhost:7860 · API docs http://localhost:7860/docs
+```
+
 **Everything in Docker** (also starts Mongo + Qdrant):
 
 ```bash
-docker compose up --build     # UI http://localhost:8501 · API docs http://localhost:8000/docs
-```
-
-**Or without Docker** (needs Mongo on :27017 and Qdrant on :6333):
-
-```bash
-uv run uvicorn src.main:app --reload --port 8000
-uv run streamlit run streamlit_app/home.py
+docker compose up --build     # same URLs
 ```
 
 Self-checks for the auth and routing logic: `uv run python -m src.api.auth` and `uv run python -m src.tools.graph_tools`.
 
-## Deploy to Hugging Face Spaces (free)
+## Deploy to Hugging Face Spaces (free, Gradio SDK)
 
-The repo is already a Docker Space (`app_port: 7860` above). [start.sh](start.sh) runs the backend
-(internal :8000) and Streamlit (public :7860) in one container. The databases need to be hosted
-services, because a Space's disk is wiped on restart.
+The settings at the top of this README make the repo a **Gradio** Space (Docker Spaces are paid).
+Hugging Face installs [requirements.txt](requirements.txt) with pip and runs `python app.py`.
+The databases have to be hosted services, because a Space's disk is wiped on restart.
+`requirements.txt` is generated from `uv.lock` (the command is in its header). Regenerate it
+whenever dependencies change, and keep `sdk_version` equal to the pinned `gradio` version.
 
 1. **MongoDB Atlas**: create a free M0 cluster at https://cloud.mongodb.com.
    - Database Access → add a user.
@@ -73,15 +76,18 @@ services, because a Space's disk is wiped on restart.
    | `MONGODB_URL` | Atlas `mongodb+srv://…` URL |
    | `QDRANT_URL` | Qdrant Cloud URL (`https://…:6333`) |
    | `QDRANT_API_KEY` | Qdrant Cloud key |
+   | `MONGODB_DB_NAME` *(optional)* | defaults to `adaptive_rag`; must match what you use locally if you want to share data |
    | `GROQ_MODEL` *(optional)* | defaults to `openai/gpt-oss-120b` |
 
-5. **Push**: `git push space main`. The Space rebuilds automatically. The first boot downloads the
-   embedding model, which takes about 30 s.
-6. **Check it**: open the Space, create an account, upload a small `.txt`, and ask about it.
+5. **Create the Space**: huggingface.co/new-space, choose SDK **Gradio**, Blank template, **CPU basic**.
+6. **Push** the `deployment` branch to the Space's `main` (Spaces only build `main`):
+   `git push --force space deployment:main`. The force replaces the template commit the Space
+   was created with. The first boot downloads the embedding model, which takes about 30 s.
+7. **Check it**: open the Space, create an account, upload a small `.txt`, and ask about it.
    Build and runtime logs are on the Space's **Logs** tab.
 
 **Any VPS instead:** install Docker, copy the repo and a filled-in `.env`, then run
-`docker compose up --build -d`. Put a reverse proxy with HTTPS (e.g. Caddy) in front of port 8501.
+`docker compose up --build -d`. Put a reverse proxy with HTTPS (e.g. Caddy) in front of port 7860.
 
 ## API
 
@@ -95,16 +101,16 @@ All `/rag/*` endpoints need `Authorization: Bearer <token>` from `/api/login`.
 | `POST /rag/documents/upload` | multipart: `file` (PDF/TXT ≤ 20 MB), `description` | `{"status": true}` |
 
 ```bash
-curl -X POST localhost:8000/api/create_user -H 'Content-Type: application/json' -d '{"username":"me","password":"password123"}'
-TOKEN=$(curl -s -X POST localhost:8000/api/login -H 'Content-Type: application/json' -d '{"username":"me","password":"password123"}' | python -c "import sys,json;print(json.load(sys.stdin)['token'])")
-curl -X POST localhost:8000/rag/documents/upload -H "Authorization: Bearer $TOKEN" -F file=@notes.pdf -F description="My notes"
-curl -X POST localhost:8000/rag/query -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"query":"Summarise my notes"}'
+curl -X POST localhost:7860/api/create_user -H 'Content-Type: application/json' -d '{"username":"me","password":"password123"}'
+TOKEN=$(curl -s -X POST localhost:7860/api/login -H 'Content-Type: application/json' -d '{"username":"me","password":"password123"}' | python -c "import sys,json;print(json.load(sys.stdin)['token'])")
+curl -X POST localhost:7860/rag/documents/upload -H "Authorization: Bearer $TOKEN" -F file=@notes.pdf -F description="My notes"
+curl -X POST localhost:7860/rag/query -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"query":"Summarise my notes"}'
 ```
 
 ## Layout
 
 ```
-src/main.py                 FastAPI app (+ Mongo index on startup)
+src/main.py                 FastAPI app (+ Mongo index on startup, /health)
 src/api/routes.py           endpoints
 src/api/auth.py             scrypt password hashes, HMAC-signed tokens (stdlib)
 src/rag/graph_builder.py    LangGraph nodes and wiring
@@ -113,7 +119,8 @@ src/rag/retriever_setup.py  Qdrant store, per-user retrieval
 src/rag/document_upload.py  validate → load → chunk → store
 src/memory/chat_history_mongo.py  chat history (last 20 messages go to the LLM)
 src/config/prompts.yaml     all prompts
-streamlit_app/              login page, chat page, API client
+app.py                      entry point: mounts the Gradio UI on the FastAPI app
+requirements.txt            pip pins for Hugging Face (generated from uv.lock)
 ```
 
 ## Known limits
