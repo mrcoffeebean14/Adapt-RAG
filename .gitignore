@@ -13,3 +13,6 @@ wheels/
 .codex
 CHANGES.md
 app.log
+# local credentials
+*_db_user.txt
+.env.local

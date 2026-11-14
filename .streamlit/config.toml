@@ -1,0 +1,3 @@
+[server]
+# MB; matches the backend's MAX_BYTES in src/rag/document_upload.py
+maxUploadSize = 20

@@ -2,90 +2,49 @@
 Chat history storage using MongoDB backend.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List
 
-from langchain_core.chat_history import BaseChatMessageHistory
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, messages_from_dict
 
 from src.db.mongo_client import db
 
 collection = db["chat_history"]
 
+# Only the most recent turns go to the LLM; older ones stay stored.
+HISTORY_WINDOW = 20
 
-class MongoDBChatMessageHistory(BaseChatMessageHistory):
-    """Chat history backed by MongoDB."""
+
+class MongoDBChatMessageHistory:
+    """Chat history for one user, stored in MongoDB."""
 
     def __init__(self, session_id: str):
-        """
-        Initialize chat history for a session.
-
-        Args:
-            session_id: Unique session identifier.
-        """
         self.session_id = session_id
 
     async def add_message(self, message: BaseMessage) -> None:
-        """
-        Save a message to MongoDB.
-
-        Args:
-            message: The message to save.
-        """
         await collection.insert_one({
             "session_id": self.session_id,
             "type": message.type,
             "content": message.content,
             "additional_kwargs": message.additional_kwargs,
-            "timestamp": datetime.utcnow(),
+            "timestamp": datetime.now(timezone.utc),
         })
 
     async def get_messages(self) -> List[BaseMessage]:
-        """
-        Load all messages for a session from MongoDB.
-
-        Returns:
-            List of messages in chronological order.
-        """
-        from langchain_core.messages import messages_from_dict
-
-        cursor = collection.find({"session_id": self.session_id}).sort("timestamp", 1)
-        docs = await cursor.to_list(length=1000)
-
-        # Convert to BaseMessage objects
+        """The last HISTORY_WINDOW messages, oldest first."""
+        cursor = (
+            collection.find({"session_id": self.session_id})
+            .sort("timestamp", -1)
+            .limit(HISTORY_WINDOW)
+        )
+        docs = (await cursor.to_list(length=HISTORY_WINDOW))[::-1]
         return messages_from_dict([
             {
                 "type": d["type"],
-                "data": {
-                    "content": d["content"],
-                    "additional_kwargs": d.get("additional_kwargs", {}),
-                }
+                "data": {"content": d["content"], "additional_kwargs": d.get("additional_kwargs", {})},
             }
             for d in docs
         ])
 
     async def clear(self) -> None:
-        """Delete all messages for a session."""
         await collection.delete_many({"session_id": self.session_id})
-
-
-class ChatHistory:
-    """Factory for MongoDB-backed chat history."""
-
-    @classmethod
-    def get_session_history(
-        cls,
-        session_id: str,
-        config: dict = None
-    ) -> MongoDBChatMessageHistory:
-        """
-        Get or create chat history for a session.
-
-        Args:
-            session_id: Unique session identifier.
-            config: Optional configuration dictionary.
-
-        Returns:
-            MongoDBChatMessageHistory instance for the session.
-        """
-        return MongoDBChatMessageHistory(session_id)

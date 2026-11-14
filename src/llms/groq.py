@@ -1,13 +1,13 @@
 """
-OpenAI LLM initialization and configuration.
+Shared Groq LLM. Reads GROQ_API_KEY from the environment.
 """
 
 import os
 
-from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 
-load_dotenv()
-os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY", "")
+import src.core.config  # noqa: F401  (loads .env)
 
-llm = ChatGroq(model="llama-3.3-70b-versatile")
+# Groq retires models often; override with GROQ_MODEL instead of editing code.
+# temperature=0: routing/grading need repeatable answers.
+llm = ChatGroq(model=os.getenv("GROQ_MODEL", "openai/gpt-oss-120b"), temperature=0)

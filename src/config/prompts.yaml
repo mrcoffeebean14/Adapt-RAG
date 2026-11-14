@@ -1,21 +1,9 @@
 prompts:
-  system_prompt: |
-    You are a helpful AI agent.
-    You MUST use tools to answer the question. Never answer directly.
-    Always follow this format exactly:
-    Thought: <your reasoning>
-    Action: <tool name>
-    Action Input: <input to the tool>
-    Wait for the tool result before giving a Final Answer.
-    Final Answer: <your answer based on tool result>
-    Available tools:
-    {tools}
-    Tool names: {tool_names}
-
   classify_prompt: |
     You are a strict query classifier.
     
     You will receive:
+    - The recent conversation
     - A user question
     - Some context from our indexed knowledge base
     
@@ -26,11 +14,15 @@ prompts:
     3. "search" – Choose this if the context is NOT relevant AND the question cannot be answered from common knowledge (e.g., requires real-time information, niche facts, or external lookup).
     
     Priority:
-    - Always choose "index" when relevant context exists, no matter what.
+    - Questions about this conversation itself (e.g. "what did I ask earlier?", "summarise our chat", "repeat your last answer") are always "general".
+    - Always choose "index" when relevant context exists.
     - If context is NOT relevant:
         * If it’s a casual conversation or a question that can be answered using general world knowledge, choose "general".
         * Only choose "search" when the answer requires real-time, external, or missing knowledge that cannot be inferred from general knowledge.
     
+    ---
+    Recent conversation:
+    {history}
     ---
     Question: {question}
     Context: {context}
@@ -52,18 +44,8 @@ prompts:
     You just have to rewrite the query so that we could get more accurate and suitable answer from our indexed information database.
 
   generate_prompt: |
-    You are a beautiful answer generator. You are given a context.
-    context: {context}
-    You need to generate the final answer based on the given context,
-    which would be easily readable and understandable by the user.
-
-  verify_prompt: |
-    You are a strict fact checker.
-    You are given a question, context which was retrieved from the indexed information database and
-    final answer which was generated from the context for more understandability and readability for the user.
+    Answer the user's question using only the context below.
+    If the context does not contain the answer, say you could not find it instead of guessing.
+    Write a clear, readable answer.
     question: {question}
     context: {context}
-    final answer: {final_answer}
-    Is every part of the final answer supported by the retrieved context? 
-    If yes, faithful=true. If not, faithful=false.
-    Provide a short explanation.
